@@ -125,11 +125,17 @@ public final class QuickSettingsLiquidGlass {
                 ImageView icon = findTileIcon(child);
                 String glyph = glyphFor(label);
                 if (icon != null && glyph != null) {
-                    icon.setImageDrawable(new IosGlyphDrawable(glyph));
+                    boolean active = isTileActive(child, icon);
+                    int tint = active ? Color.rgb(255, 255, 255) : Color.rgb(205, 212, 224);
+                    icon.setImageDrawable(new IosGlyphDrawable(glyph, tint));
                     icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                    placeIconAtLeadingEdge(icon);
+                    alignTileLabel(child);
                     counts[1]++;
                     XposedBridge.log("iP26: QS_IOS_ICON_APPLIED tile=" + label
-                            + " glyph=" + glyph + " image=" + icon.getClass().getName());
+                            + " glyph=" + glyph + " active=" + active
+                            + " tint=#" + Integer.toHexString(tint)
+                            + " image=" + icon.getClass().getName());
                 } else if (icon != null) {
                     counts[2]++;
                     XposedBridge.log("iP26: QS_IOS_ICON_UNMAPPED tile=" + label);
@@ -219,6 +225,70 @@ public final class QuickSettingsLiquidGlass {
         return null;
     }
 
+    /**
+     * Keep OEM tile click targets and parentage intact. Only adjust the existing
+     * icon's layout params when its immediate container supports FrameLayout gravity.
+     */
+    private static void placeIconAtLeadingEdge(ImageView icon) {
+        try {
+            float d = icon.getResources().getDisplayMetrics().density;
+            ViewGroup.LayoutParams raw = icon.getLayoutParams();
+            if (raw instanceof android.widget.FrameLayout.LayoutParams) {
+                android.widget.FrameLayout.LayoutParams lp =
+                        (android.widget.FrameLayout.LayoutParams) raw;
+                lp.gravity = android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL;
+                lp.width = Math.round(24f * d);
+                lp.height = Math.round(24f * d);
+                lp.setMarginStart(Math.round(12f * d));
+                lp.setMarginEnd(Math.round(8f * d));
+                icon.setLayoutParams(lp);
+            } else if (raw instanceof ViewGroup.MarginLayoutParams) {
+                ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) raw;
+                lp.width = Math.round(24f * d);
+                lp.height = Math.round(24f * d);
+                lp.setMarginStart(Math.round(12f * d));
+                icon.setLayoutParams(lp);
+            }
+        } catch (Throwable t) {
+            XposedBridge.log("iP26: QS_IOS_ICON_LAYOUT_SKIP error=" + t);
+        }
+    }
+
+    private static void alignTileLabel(View tile) {
+        try {
+            alignTileLabelRecursive(tile);
+        } catch (Throwable t) {
+            XposedBridge.log("iP26: QS_IOS_LABEL_LAYOUT_SKIP error=" + t);
+        }
+    }
+
+    private static void alignTileLabelRecursive(View view) {
+        if (view instanceof TextView) {
+            TextView text = (TextView) view;
+            text.setGravity((text.getGravity() & ~android.view.Gravity.CENTER_HORIZONTAL)
+                    | android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL);
+            return;
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                alignTileLabelRecursive(group.getChildAt(i));
+            }
+        }
+    }
+
+    private static boolean isTileActive(View tile, ImageView icon) {
+        if (tile.isActivated() || tile.isSelected()
+                || icon.isActivated() || icon.isSelected()) return true;
+        CharSequence state = tile.getStateDescription();
+        if (state != null) {
+            String value = state.toString().toLowerCase(java.util.Locale.ROOT);
+            if (value.contains("on") || value.contains("aktif")
+                    || value.contains("tersambung") || value.contains("connected")) return true;
+        }
+        return false;
+    }
+
     private static boolean applyGlass(View view) {
         try {
             synchronized (STYLED) {
@@ -255,12 +325,14 @@ public final class QuickSettingsLiquidGlass {
     /** Minimal SF-symbol-inspired line glyphs, drawn locally without external assets. */
     private static final class IosGlyphDrawable extends Drawable {
         private final String glyph;
+        private final int tint;
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
 
-        IosGlyphDrawable(String glyph) {
+        IosGlyphDrawable(String glyph, int tint) {
             this.glyph = glyph;
-            p.setColor(Color.WHITE);
+            this.tint = tint;
+            p.setColor(tint);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(2.15f);
             p.setStrokeCap(Paint.Cap.ROUND);
@@ -275,7 +347,7 @@ public final class QuickSettingsLiquidGlass {
             canvas.translate(b.left + (b.width() - side) / 2f,
                     b.top + (b.height() - side) / 2f);
             canvas.scale(side / 48f, side / 48f);
-            p.setColor(Color.WHITE);
+            p.setColor(tint);
             p.setStyle(Paint.Style.STROKE);
             path.reset();
             switch (glyph) {
@@ -373,7 +445,7 @@ public final class QuickSettingsLiquidGlass {
 
         private Paint fill() {
             Paint q = new Paint(Paint.ANTI_ALIAS_FLAG);
-            q.setColor(Color.WHITE); q.setStyle(Paint.Style.FILL); return q;
+            q.setColor(tint); q.setStyle(Paint.Style.FILL); return q;
         }
         private static void arc(Path p,float l,float t,float r,float b,float start,float sweep) {
             p.addArc(new RectF(l,t,r,b),start,sweep);
