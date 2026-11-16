@@ -279,12 +279,15 @@ public final class QuickSettingsLiquidGlass {
 
     private static boolean isTileActive(View tile, ImageView icon) {
         if (tile.isActivated() || tile.isSelected()
-                || icon.isActivated() || icon.isSelected()) return true;
+                || (icon != null && (icon.isActivated() || icon.isSelected()))) return true;
         CharSequence state = tile.getStateDescription();
+        if (state == null || state.length() == 0) state = tile.getContentDescription();
         if (state != null) {
             String value = state.toString().toLowerCase(java.util.Locale.ROOT);
-            if (value.contains("on") || value.contains("aktif")
-                    || value.contains("tersambung") || value.contains("connected")) return true;
+            if (value.startsWith("on") || value.contains(", on")
+                    || value.contains("aktif") || value.contains("nyala")
+                    || value.contains("tersambung") || value.contains("terhubung")
+                    || value.contains("connected") || value.contains("enabled")) return true;
         }
         return false;
     }
@@ -362,7 +365,8 @@ public final class QuickSettingsLiquidGlass {
             float height = Math.max(1, view.getHeight());
             float ratio = width / height;
             boolean connectivity = isConnectivityLabel(label);
-            boolean active = isTileActive(view, findTileIcon(view));
+            ImageView tileIcon = findTileIcon(view);
+            boolean active = isTileActive(view, tileIcon);
             int top = connectivity
                     ? (active ? Color.argb(150, 54, 126, 255) : Color.argb(76, 232, 242, 255))
                     : (active ? Color.argb(112, 76, 132, 238) : Color.argb(58, 246, 249, 255));
