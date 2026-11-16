@@ -102,6 +102,73 @@ jobs:
           echo "=== Xposed manifest metadata ==="
           "$APKANALYZER" manifest print "verified/$(basename "$APK")" | grep -E 'xposedmodule|xposedminversion|xposed_init' || true
 
+
+      - name: Audit and package KernelSU module
+        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          MODULE_DIR="kernelsu-module"
+          test -d "$MODULE_DIR"
+          echo "=== KernelSU module source ==="
+          for file in module.prop customize.sh service.sh uninstall.sh; do
+            test -f "$MODULE_DIR/$file" || { echo "::error::Missing $file"; exit 1; }
+            echo "===== $file ====="
+            cat "$MODULE_DIR/$file"
+          done
+          python3 - "$MODULE_DIR/module.prop" <<'PY'
+          import re, sys
+          props = {}
+          for raw in open(sys.argv[1], encoding="utf-8"):
+              line = raw.strip()
+              if not line or line.startswith("#") or "=" not in line:
+                  continue
+              key, value = line.split("=", 1)
+              props[key.strip()] = value.strip()
+          required = ("id", "name", "version", "versionCode", "author", "description")
+          missing = [k for k in required if not props.get(k)]
+          if missing:
+              raise SystemExit("Missing required module.prop keys: " + ", ".join(missing))
+          if not re.fullmatch(r"[A-Za-z0-9._-]+", props["id"]):
+              raise SystemExit("Invalid module id")
+          if not props["versionCode"].isdigit():
+              raise SystemExit("versionCode must be numeric")
+          print("module.prop metadata: PASS")
+          print("Module ID:", props["id"])
+          print("Module version:", props["version"])
+          PY
+          for script in customize.sh service.sh uninstall.sh; do
+            head -n 1 "$MODULE_DIR/$script" | grep -q '^#!' || { echo "::error::$script has no shebang"; exit 1; }
+            bash -n "$MODULE_DIR/$script"
+          done
+          PACKAGE="$PWD/kernelsu-package"
+          rm -rf "$PACKAGE"
+          mkdir -p "$PACKAGE"
+          cp "$MODULE_DIR/module.prop" "$MODULE_DIR/customize.sh" "$MODULE_DIR/service.sh" "$MODULE_DIR/uninstall.sh" "$PACKAGE/"
+          chmod 0644 "$PACKAGE/module.prop"
+          chmod 0755 "$PACKAGE/customize.sh" "$PACKAGE/service.sh" "$PACKAGE/uninstall.sh"
+          (cd "$PACKAGE" && zip -X -9 -r "$PWD/../iP26-Liquid-Glass-KernelSU-0.1.30-dev.zip" .)
+          ZIP="$PWD/iP26-Liquid-Glass-KernelSU-0.1.30-dev.zip"
+          test -s "$ZIP"
+          echo "=== ZIP listing ==="
+          unzip -l "$ZIP"
+          unzip -t "$ZIP"
+          python3 - "$ZIP" <<'PY'
+          import sys, zipfile
+          z = zipfile.ZipFile(sys.argv[1])
+          names = z.namelist()
+          expected = {"module.prop", "customize.sh", "service.sh", "uninstall.sh"}
+          if set(names) != expected:
+              raise SystemExit(f"Unexpected module ZIP root entries: {names}")
+          for name in expected:
+              info = z.getinfo(name)
+              mode = (info.external_attr >> 16) & 0o777
+              if name.endswith(".sh") and not (mode & 0o111):
+                  raise SystemExit(f"{name} is not executable in ZIP ({oct(mode)})")
+          print("KernelSU ZIP structure and executable permissions: PASS")
+          PY
+          sha256sum "$ZIP"
+
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
