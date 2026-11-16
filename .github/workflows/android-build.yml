@@ -170,6 +170,16 @@ jobs:
           PY
           sha256sum "$ZIP"
 
+      - name: Upload app source for static audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: iP26-Liquid-Glass-app-source-audit
+          path: |
+            ${{ env.PROJECT_DIR }}/app/src/main/AndroidManifest.xml
+            ${{ env.PROJECT_DIR }}/app/src/main/java/**
+            ${{ env.PROJECT_DIR }}/app/src/main/res/**
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload KernelSU module ZIP
         uses: actions/upload-artifact@v4
         with:
