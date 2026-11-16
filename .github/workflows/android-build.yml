@@ -140,6 +140,7 @@ jobs:
           for script in customize.sh service.sh uninstall.sh; do
             head -n 1 "$MODULE_DIR/$script" | grep -q '^#!' || { echo "::error::$script has no shebang"; exit 1; }
             bash -n "$MODULE_DIR/$script"
+            sh -n "$MODULE_DIR/$script"
           done
           PACKAGE="$PWD/kernelsu-package"
           rm -rf "$PACKAGE"
@@ -168,6 +169,14 @@ jobs:
           print("KernelSU ZIP structure and executable permissions: PASS")
           PY
           sha256sum "$ZIP"
+
+      - name: Upload KernelSU module ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: iP26-Liquid-Glass-KernelSU-module
+          path: ${{ env.PROJECT_DIR }}/iP26-Liquid-Glass-KernelSU-0.1.30-dev.zip
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload verified APK
         uses: actions/upload-artifact@v4
