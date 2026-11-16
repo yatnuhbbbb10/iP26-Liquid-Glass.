@@ -64,7 +64,7 @@ jobs:
           echo "=== App build.gradle ==="
           cat "$PROJECT_DIR/app/build.gradle"
 
-      - name: Apply read-only Quick Settings hierarchy probe
+      - name: Apply Quick Settings hierarchy probe and Liquid Glass tile styling
         shell: bash
         run: |
           set -euo pipefail
@@ -72,19 +72,20 @@ jobs:
           test -f "$JAVA_DIR/LiquidGlassEntry.java"
           mkdir -p "$JAVA_DIR"
           cp overrides/QuickSettingsHierarchyProbe.java "$JAVA_DIR/QuickSettingsHierarchyProbe.java"
+          cp overrides/QuickSettingsLiquidGlass.java "$JAVA_DIR/QuickSettingsLiquidGlass.java"
           python3 - "$JAVA_DIR/LiquidGlassEntry.java" <<'PY'
           import pathlib, sys
           p = pathlib.Path(sys.argv[1])
           source = p.read_text(encoding="utf-8")
           import re
           pattern = r"(installSeekLayoutProbe\(\(ViewGroup\) root\);)"
-          updated, count = re.subn(pattern, r"\1\n                                        // Read-only QS hierarchy/resource diagnostic.\n                                        QuickSettingsHierarchyProbe.install(root);", source)
+          updated, count = re.subn(pattern, r"\1\n                                        // Read-only QS hierarchy diagnostic plus tile-only glass overlay.\n                                        QuickSettingsHierarchyProbe.install(root);\n                                        QuickSettingsLiquidGlass.install(root);", source)
           if count != 1:
               raise SystemExit(f"Expected one SeekLayout probe insertion point, found {count}; refusing to patch")
           p.write_text(updated, encoding="utf-8")
-          print("Applied read-only Quick Settings hierarchy probe")
+          print("Applied Quick Settings hierarchy probe and tile-only Liquid Glass styling")
           PY
-          grep -n "QuickSettingsHierarchyProbe.install" "$JAVA_DIR/LiquidGlassEntry.java"
+          grep -nE "QuickSettings(HierarchyProbe|LiquidGlass).install" "$JAVA_DIR/LiquidGlassEntry.java"
 
       - name: Audit Xposed API 82 dependency
         working-directory: ${{ env.PROJECT_DIR }}
