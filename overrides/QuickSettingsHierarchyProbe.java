@@ -218,7 +218,7 @@ public final class QuickSettingsHierarchyProbe {
         if (value == null) return "null";
         String result;
         try {
-            result = String.valueOf(value).replace('\\n', ' ').replace('\\r', ' ');
+            result = String.valueOf(value).replace('\n', ' ').replace('\r', ' ');
         } catch (Throwable ignored) {
             return "<unavailable>";
         }
