@@ -32,6 +32,11 @@ jobs:
           test -x "$SDKMANAGER"
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
       - name: Extract and inspect source archive
         id: source
         shell: bash
@@ -44,32 +49,35 @@ jobs:
           unzip -q "$ARCHIVE" -d source
           echo "=== Archive file listing ==="
           find source -maxdepth 5 -type f | sort | head -300
-          WRAPPER="$(find source -type f -name gradlew -print -quit)"
-          if [ -z "$WRAPPER" ]; then
-            echo "::error::No Gradle wrapper (gradlew) found in source archive."
+          PROJECT_SETTINGS="$(find source -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit)"
+          if [ -z "$PROJECT_SETTINGS" ]; then
+            echo "::error::No Gradle settings file found in source archive."
             exit 1
           fi
-          PROJECT_DIR="$(dirname "$WRAPPER")"
+          PROJECT_DIR="$(dirname "$PROJECT_SETTINGS")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          chmod +x "$WRAPPER"
           echo "Gradle project root: $PROJECT_DIR"
           find "$PROJECT_DIR" -maxdepth 3 \( -name 'build.gradle' -o -name 'build.gradle.kts' -o -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print
+          echo "=== Root build.gradle ==="
+          cat "$PROJECT_DIR/build.gradle"
+          echo "=== App build.gradle ==="
+          cat "$PROJECT_DIR/app/build.gradle"
 
       - name: Audit Xposed API 82 dependency
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon tasks --all
-          ./gradlew --no-daemon :app:dependencies --configuration debugCompileClasspath || true
-          ./gradlew --no-daemon :app:dependencyInsight --dependency de.robv.android.xposed:api --configuration debugCompileClasspath || true
-          if ./gradlew --no-daemon tasks --all | grep -q 'verifyXposedApi82Resolution'; then
-            ./gradlew --no-daemon verifyXposedApi82Resolution
+          gradle --no-daemon tasks --all
+          gradle --no-daemon :app:dependencies --configuration debugCompileClasspath || true
+          gradle --no-daemon :app:dependencyInsight --dependency de.robv.android.xposed:api --configuration debugCompileClasspath || true
+          if gradle --no-daemon tasks --all | grep -q 'verifyXposedApi82Resolution'; then
+            gradle --no-daemon verifyXposedApi82Resolution
           fi
 
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}
-        run: ./gradlew --no-daemon --stacktrace :app:assembleDebug
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Verify APK
         shell: bash
