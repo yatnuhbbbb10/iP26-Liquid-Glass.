@@ -87,6 +87,7 @@ public final class QuickSettingsLiquidGlass {
             int[] counts = {0, 0, 0};
             Set<View> visited = Collections.newSetFromMap(
                     new IdentityHashMap<View, Boolean>());
+            applyConnectivityGroup(panel);
             scan((ViewGroup) panel, 0, counts, visited);
             XposedBridge.log("iP26: QS_GLASS_APPLIED panelId=" + selectedId
                     + " panelClass=" + panel.getClass().getName()
@@ -117,11 +118,10 @@ public final class QuickSettingsLiquidGlass {
             if (child == null || !visited.add(child)) continue;
 
             if (isTileRoot(child)) {
-                if (child.getWidth() > 0 && child.getHeight() > 0
-                        && child.getVisibility() == View.VISIBLE) {
-                    if (applyGlass(child)) counts[0]++;
-                }
                 String label = tileLabel(child);
+                if (child.getVisibility() == View.VISIBLE) {
+                    if (applyTileSurface(child, label)) counts[0]++;
+                }
                 ImageView icon = findTileIcon(child);
                 String glyph = glyphFor(label);
                 if (icon != null && glyph != null) {
@@ -287,6 +287,122 @@ public final class QuickSettingsLiquidGlass {
                     || value.contains("tersambung") || value.contains("connected")) return true;
         }
         return false;
+    }
+
+    private static boolean isConnectivityLabel(String label) {
+        String s = label == null ? "" : label.toLowerCase(java.util.Locale.ROOT);
+        return s.contains("wi-fi") || s.contains("wifi")
+                || s.contains("bluetooth") || s.contains("indosat")
+                || s.contains("data seluler") || s.contains("mobile data")
+                || s.contains("data mobile");
+    }
+
+    /**
+     * Visually groups the OEM fixed connectivity area without moving or
+     * replacing its child tiles. The vendor keeps every original click target.
+     */
+    private static void applyConnectivityGroup(View panel) {
+        try {
+            int id = panel.getResources().getIdentifier(
+                    "fixed_tiles_view", "id", "com.android.systemui");
+            if (id == 0) {
+                XposedBridge.log("iP26: QS_CONNECTIVITY_GROUP_SKIP reason=id_missing");
+                return;
+            }
+            View group = panel.findViewById(id);
+            if (!(group instanceof ViewGroup)) {
+                XposedBridge.log("iP26: QS_CONNECTIVITY_GROUP_SKIP reason=view_missing");
+                return;
+            }
+            synchronized (STYLED) {
+                if (STYLED.containsKey(group)) return;
+                STYLED.put(group, Boolean.TRUE);
+            }
+            float d = group.getResources().getDisplayMetrics().density;
+            GradientDrawable surface = new GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[]{Color.argb(76, 232, 242, 255),
+                            Color.argb(42, 164, 190, 226),
+                            Color.argb(62, 218, 232, 250)});
+            surface.setCornerRadius(28f * d);
+            surface.setStroke(Math.max(1, Math.round(d)),
+                    Color.argb(126, 244, 249, 255));
+            Drawable original = group.getBackground();
+            if (original == null) {
+                group.setBackground(surface);
+            } else {
+                Drawable.ConstantState state = original.getConstantState();
+                Drawable base = state == null ? original
+                        : state.newDrawable(group.getResources()).mutate();
+                group.setBackground(new LayerDrawable(new Drawable[]{base, surface}));
+            }
+            group.setElevation(2f * d);
+            XposedBridge.log("iP26: QS_CONNECTIVITY_GROUP_APPLIED id=fixed_tiles_view"
+                    + " size=" + group.getWidth() + "x" + group.getHeight()
+                    + " children=" + ((ViewGroup) group).getChildCount()
+                    + " mode=preserve_oem_children");
+        } catch (Throwable t) {
+            XposedBridge.log("iP26: QS_CONNECTIVITY_GROUP_FAILED error=" + t);
+        }
+    }
+
+    /**
+     * Gives each existing tile a state-tinted glass surface and selects a
+     * rounded-square, capsule, or segmented-connectivity shape from its measured
+     * bounds. No tile is reparented and no listener or click handler is changed.
+     */
+    private static boolean applyTileSurface(View view, String label) {
+        try {
+            synchronized (STYLED) {
+                if (STYLED.containsKey(view)) return false;
+                STYLED.put(view, Boolean.TRUE);
+            }
+            float d = view.getResources().getDisplayMetrics().density;
+            float width = Math.max(1, view.getWidth());
+            float height = Math.max(1, view.getHeight());
+            float ratio = width / height;
+            boolean connectivity = isConnectivityLabel(label);
+            boolean active = isTileActive(view, findTileIcon(view));
+            int top = connectivity
+                    ? (active ? Color.argb(150, 54, 126, 255) : Color.argb(76, 232, 242, 255))
+                    : (active ? Color.argb(112, 76, 132, 238) : Color.argb(58, 246, 249, 255));
+            int bottom = connectivity
+                    ? (active ? Color.argb(112, 30, 92, 218) : Color.argb(38, 174, 198, 230))
+                    : (active ? Color.argb(78, 42, 94, 196) : Color.argb(34, 190, 211, 238));
+            GradientDrawable glass = new GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM, new int[]{top, bottom});
+            if (connectivity) {
+                glass.setCornerRadius(18f * d);
+            } else if (ratio >= 1.45f) {
+                glass.setCornerRadius(Math.max(18f * d, height * 0.48f));
+            } else if (ratio <= 1.15f) {
+                glass.setCornerRadius(Math.min(width, height) * 0.34f);
+            } else {
+                glass.setCornerRadius(22f * d);
+            }
+            glass.setStroke(Math.max(1, Math.round(d)),
+                    Color.argb(connectivity ? 150 : 112, 244, 249, 255));
+            Drawable original = view.getBackground();
+            if (original == null) {
+                view.setBackground(glass);
+            } else {
+                Drawable.ConstantState state = original.getConstantState();
+                Drawable base = state == null ? original
+                        : state.newDrawable(view.getResources()).mutate();
+                view.setBackground(new LayerDrawable(new Drawable[]{base, glass}));
+            }
+            view.setElevation((connectivity ? 3f : 2f) * d);
+            XposedBridge.log("iP26: QS_TILE_SHAPE_APPLIED tile=" + label
+                    + " connectivity=" + connectivity + " active=" + active
+                    + " bounds=" + view.getWidth() + "x" + view.getHeight()
+                    + " shape=" + (connectivity ? "connectivity-segment"
+                    : ratio >= 1.45f ? "capsule"
+                    : ratio <= 1.15f ? "rounded-square" : "rounded-card"));
+            return true;
+        } catch (Throwable t) {
+            XposedBridge.log("iP26: QS_TILE_SHAPE_FAILED tile=" + label + " error=" + t);
+            return false;
+        }
     }
 
     private static boolean applyGlass(View view) {
