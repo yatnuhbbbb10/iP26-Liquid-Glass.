@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/android-build.yml'
       - 'iP26_Liquid_Glass_source_0.1.30-dev.zip'
+      - 'overrides/**'
   workflow_dispatch:
 
 permissions:
@@ -63,6 +64,31 @@ jobs:
           echo "=== App build.gradle ==="
           cat "$PROJECT_DIR/app/build.gradle"
 
+      - name: Apply read-only Quick Settings hierarchy probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAVA_DIR="$PROJECT_DIR/app/src/main/java/id/ip26/controlcenter"
+          test -f "$JAVA_DIR/LiquidGlassEntry.java"
+          mkdir -p "$JAVA_DIR"
+          cp overrides/QuickSettingsHierarchyProbe.java "$JAVA_DIR/QuickSettingsHierarchyProbe.java"
+          python3 - "$JAVA_DIR/LiquidGlassEntry.java" <<'PY'
+          import pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          source = p.read_text(encoding="utf-8")
+          anchor = """                                    if (root instanceof ViewGroup) {
+                                        installSeekLayoutProbe((ViewGroup) root);
+                                    }"""
+          replacement = anchor + """
+                                    // Read-only diagnostic: records runtime SystemUI classes/resource IDs.
+                                    QuickSettingsHierarchyProbe.install(root);"""
+          if source.count(anchor) != 1:
+              raise SystemExit("Expected unique SeekLayout probe insertion point; refusing to patch")
+          p.write_text(source.replace(anchor, replacement), encoding="utf-8")
+          print("Applied read-only Quick Settings hierarchy probe")
+          PY
+          grep -n "QuickSettingsHierarchyProbe.install" "$JAVA_DIR/LiquidGlassEntry.java"
+
       - name: Audit Xposed API 82 dependency
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -101,7 +127,6 @@ jobs:
           "$APKSIGNER" verify --verbose "verified/$(basename "$APK")"
           echo "=== Xposed manifest metadata ==="
           "$APKANALYZER" manifest print "verified/$(basename "$APK")" | grep -E 'xposedmodule|xposedminversion|xposed_init' || true
-
 
       - name: Audit and package KernelSU module
         shell: bash
@@ -180,6 +205,7 @@ jobs:
             ${{ env.PROJECT_DIR }}/app/src/main/res/**
           if-no-files-found: error
           retention-days: 7
+
       - name: Upload KernelSU module ZIP
         uses: actions/upload-artifact@v4
         with:
