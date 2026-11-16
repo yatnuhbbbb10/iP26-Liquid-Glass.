@@ -1,5 +1,6 @@
 package id.ip26.controlcenter;
 
+import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
@@ -47,53 +48,32 @@ public final class QuickSettingsHierarchyProbe {
                         if (PROBED.containsKey(root)) return;
                         PROBED.put(root, Boolean.TRUE);
                     }
+
                     final int[] attempts = {0};
                     final boolean[] finished = {false};
+                    final long startedElapsed = SystemClock.elapsedRealtime();
+                    final long armedWallTime = System.currentTimeMillis();
+
                     final ViewTreeObserver.OnGlobalLayoutListener listener =
                             new ViewTreeObserver.OnGlobalLayoutListener() {
                         @Override public void onGlobalLayout() {
                             if (finished[0]) return;
-                            attempts[0]++;
-                            try {
-                                List<View> targets = findTargets(root);
-                                if (!targets.isEmpty()) {
-                                    finished[0] = true;
-                                    removeListener(root, this);
-                                    dumpTargets(targets, attempts[0]);
-                                    return;
-                                }
-                                if (attempts[0] >= MAX_LAYOUT_RETRIES) {
-                                    finished[0] = true;
-                                    removeListener(root, this);
-                                    XposedBridge.log("iP26: QS_TARGET_RETRY_EXHAUSTED idEntry="
-                                            + TARGET_ID + " attempts=" + attempts[0]);
-                                }
-                            } catch (Throwable t) {
-                                finished[0] = true;
-                                removeListener(root, this);
-                                XposedBridge.log("iP26: focused QS retry failed safely: " + t);
-                            }
+                            checkAndMaybeDump(root, this, attempts, finished,
+                                    startedElapsed, armedWallTime, "global_layout");
                         }
                     };
+
                     root.getViewTreeObserver().addOnGlobalLayoutListener(listener);
-                    // Catch a target that was already present before the first global-layout event.
+                    XposedBridge.log("iP26: QS_TARGET_RETRY_ARMED idEntry=" + TARGET_ID
+                            + " maxLayoutRetries=" + MAX_LAYOUT_RETRIES
+                            + " armedWallTimeMs=" + armedWallTime);
+
+                    // First check is counted too; it must not bypass the size-validity gate.
                     root.post(() -> {
                         if (finished[0]) return;
-                        try {
-                            List<View> targets = findTargets(root);
-                            if (!targets.isEmpty()) {
-                                finished[0] = true;
-                                removeListener(root, listener);
-                                dumpTargets(targets, attempts[0]);
-                            }
-                        } catch (Throwable t) {
-                            finished[0] = true;
-                            removeListener(root, listener);
-                            XposedBridge.log("iP26: focused QS initial check failed safely: " + t);
-                        }
+                        checkAndMaybeDump(root, listener, attempts, finished,
+                                startedElapsed, armedWallTime, "initial_post");
                     });
-                    XposedBridge.log("iP26: QS_TARGET_RETRY_ARMED idEntry=" + TARGET_ID
-                            + " maxLayoutRetries=" + MAX_LAYOUT_RETRIES);
                 } catch (Throwable t) {
                     XposedBridge.log("iP26: focused QS probe setup failed safely: " + t);
                 }
@@ -101,6 +81,81 @@ public final class QuickSettingsHierarchyProbe {
         } catch (Throwable t) {
             XposedBridge.log("iP26: focused QS probe post failed safely: " + t);
         }
+    }
+
+    private static void checkAndMaybeDump(View root,
+            ViewTreeObserver.OnGlobalLayoutListener listener,
+            int[] attempts, boolean[] finished, long startedElapsed,
+            long armedWallTime, String trigger) {
+        if (finished[0]) return;
+        attempts[0]++;
+        final long nowElapsed = SystemClock.elapsedRealtime();
+        final long elapsedMs = Math.max(0L, nowElapsed - startedElapsed);
+        final long wallTimeMs = System.currentTimeMillis();
+        try {
+            List<View> targets = findTargets(root);
+            if (targets.isEmpty()) {
+                XposedBridge.log("iP26: QS_TARGET_WAIT idEntry=" + TARGET_ID
+                        + " reason=not_found trigger=" + trigger
+                        + " retry=" + attempts[0] + "/" + MAX_LAYOUT_RETRIES
+                        + " elapsedMs=" + elapsedMs + " wallTimeMs=" + wallTimeMs);
+            } else {
+                boolean allValid = true;
+                for (int i = 0; i < targets.size(); i++) {
+                    View target = targets.get(i);
+                    if (!hasValidLayout(target)) {
+                        allValid = false;
+                        XposedBridge.log("iP26: QS_TARGET_WAIT idEntry=" + TARGET_ID
+                                + " reason=layout_not_valid trigger=" + trigger
+                                + " targetIndex=" + i
+                                + " width=" + target.getWidth()
+                                + " height=" + target.getHeight()
+                                + " measuredWidth=" + target.getMeasuredWidth()
+                                + " measuredHeight=" + target.getMeasuredHeight()
+                                + " retry=" + attempts[0] + "/" + MAX_LAYOUT_RETRIES
+                                + " elapsedMs=" + elapsedMs
+                                + " wallTimeMs=" + wallTimeMs);
+                    }
+                }
+                if (allValid) {
+                    finished[0] = true;
+                    removeListener(root, listener);
+                    XposedBridge.log("iP26: QS_TARGET_LAYOUT_VALID idEntry=" + TARGET_ID
+                            + " trigger=" + trigger
+                            + " retry=" + attempts[0]
+                            + " elapsedMs=" + elapsedMs
+                            + " armedWallTimeMs=" + armedWallTime
+                            + " validWallTimeMs=" + wallTimeMs
+                            + " targetCount=" + targets.size());
+                    dumpTargets(targets, attempts[0], elapsedMs, wallTimeMs);
+                    return;
+                }
+            }
+
+            if (attempts[0] >= MAX_LAYOUT_RETRIES) {
+                finished[0] = true;
+                removeListener(root, listener);
+                XposedBridge.log("iP26: QS_TARGET_RETRY_EXHAUSTED idEntry=" + TARGET_ID
+                        + " attempts=" + attempts[0]
+                        + " elapsedMs=" + elapsedMs
+                        + " armedWallTimeMs=" + armedWallTime
+                        + " exhaustedWallTimeMs=" + wallTimeMs
+                        + " finalStatus=" + (targets.isEmpty()
+                            ? "NOT_FOUND" : "LAYOUT_INVALID"));
+            }
+        } catch (Throwable t) {
+            finished[0] = true;
+            removeListener(root, listener);
+            XposedBridge.log("iP26: focused QS retry failed safely: " + t);
+        }
+    }
+
+    private static boolean hasValidLayout(View view) {
+        return view != null
+                && view.getWidth() > 0
+                && view.getHeight() > 0
+                && view.getMeasuredWidth() > 0
+                && view.getMeasuredHeight() > 0;
     }
 
     private static void removeListener(View root,
@@ -120,11 +175,15 @@ public final class QuickSettingsHierarchyProbe {
         return targets;
     }
 
-    private static void dumpTargets(List<View> targets, int attempts) {
+    private static void dumpTargets(List<View> targets, int attempts,
+            long elapsedMs, long wallTimeMs) {
         try {
             XposedBridge.log("iP26: QS_PROBE_BEGIN targetId=" + TARGET_ID
                     + " targetCount=" + targets.size()
-                    + " layoutAttempts=" + attempts);
+                    + " layoutAttempts=" + attempts
+                    + " elapsedMs=" + elapsedMs
+                    + " wallTimeMs=" + wallTimeMs
+                    + " layoutStatus=VALID");
             for (int i = 0; i < targets.size(); i++) {
                 View target = targets.get(i);
                 XposedBridge.log("iP26: QS_TILE_ROOT index=" + i + " " + describe(target));
@@ -136,7 +195,10 @@ public final class QuickSettingsHierarchyProbe {
                         + " truncated=" + (count[0] >= MAX_TILE_VIEWS));
             }
             XposedBridge.log("iP26: QS_PROBE_END targets=" + targets.size()
-                    + " layoutAttempts=" + attempts);
+                    + " layoutAttempts=" + attempts
+                    + " elapsedMs=" + elapsedMs
+                    + " wallTimeMs=" + wallTimeMs
+                    + " layoutStatus=VALID");
         } catch (Throwable t) {
             XposedBridge.log("iP26: focused QS probe dump failed safely: " + t);
         }
@@ -201,6 +263,7 @@ public final class QuickSettingsHierarchyProbe {
                 + " contentDescription=" + safeValue(contentDescription)
                 + " tag=" + safeValue(tag)
                 + " size=" + view.getWidth() + "x" + view.getHeight()
+                + " measuredSize=" + view.getMeasuredWidth() + "x" + view.getMeasuredHeight()
                 + " visibility=" + view.getVisibility()
                 + " clickable=" + view.isClickable()
                 + " longClickable=" + view.isLongClickable()
@@ -218,7 +281,7 @@ public final class QuickSettingsHierarchyProbe {
         if (value == null) return "null";
         String result;
         try {
-            result = String.valueOf(value).replace('\n', ' ').replace('\r', ' ');
+            result = String.valueOf(value).replace('\\n', ' ').replace('\\r', ' ');
         } catch (Throwable ignored) {
             return "<unavailable>";
         }
