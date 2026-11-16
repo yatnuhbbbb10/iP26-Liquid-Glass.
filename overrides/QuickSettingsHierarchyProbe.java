@@ -29,6 +29,8 @@ public final class QuickSettingsHierarchyProbe {
     private static final int MAX_DEPTH = 32;
     private static final int MAX_TEXT_LENGTH = 180;
     private static final int MAX_LAYOUT_RETRIES = 48;
+    private static final int MAX_GLOBAL_TREE_NODES = 10000;
+    private static final int MAX_GLOBAL_TREE_DEPTH = 48;
 
     private QuickSettingsHierarchyProbe() {}
 
@@ -128,6 +130,9 @@ public final class QuickSettingsHierarchyProbe {
                             + " validWallTimeMs=" + wallTimeMs
                             + " targetCount=" + targets.size());
                     dumpTargets(targets, attempts[0], elapsedMs, wallTimeMs);
+                    // Second, read-only pass: map the complete attached hierarchy so
+                    // scroll/page/container branches outside fixed_tiles_view are visible.
+                    dumpGlobalHierarchy(root, attempts[0], elapsedMs, wallTimeMs);
                     return;
                 }
             }
@@ -290,4 +295,109 @@ public final class QuickSettingsHierarchyProbe {
         }
         return result;
     }
+
+    /**
+     * Read-only whole-root hierarchy inventory. This deliberately runs only after the
+     * fixed_tiles_view layout gate succeeds, and does not mutate any View properties.
+     * Every attached node is recorded with its parent and child index; scroll/page-like
+     * containers receive an additional marker to make off-grid branches easy to locate.
+     */
+    private static void dumpGlobalHierarchy(View root, int attempts,
+            long elapsedMs, long wallTimeMs) {
+        try {
+            XposedBridge.log("iP26: QS_GLOBAL_TREE_BEGIN layoutAttempts=" + attempts
+                    + " elapsedMs=" + elapsedMs
+                    + " wallTimeMs=" + wallTimeMs
+                    + " nodeLimit=" + MAX_GLOBAL_TREE_NODES
+                    + " depthLimit=" + MAX_GLOBAL_TREE_DEPTH);
+            Set<View> visited = Collections.newSetFromMap(
+                    new IdentityHashMap<View, Boolean>());
+            int[] count = {0};
+            walkGlobalHierarchy(root, null, -1, 0, visited, count);
+            XposedBridge.log("iP26: QS_GLOBAL_TREE_END nodes=" + count[0]
+                    + " truncated=" + (count[0] >= MAX_GLOBAL_TREE_NODES)
+                    + " layoutAttempts=" + attempts
+                    + " elapsedMs=" + elapsedMs
+                    + " wallTimeMs=" + wallTimeMs);
+        } catch (Throwable t) {
+            XposedBridge.log("iP26: QS global hierarchy dump failed safely: " + t);
+        }
+    }
+
+    private static void walkGlobalHierarchy(View view, View parent, int childIndex,
+            int depth, Set<View> visited, int[] count) {
+        if (view == null || depth > MAX_GLOBAL_TREE_DEPTH
+                || count[0] >= MAX_GLOBAL_TREE_NODES || !visited.add(view)) return;
+        count[0]++;
+        String parentClass = parent == null ? "none" : parent.getClass().getName();
+        String node = "depth=" + depth
+                + " index=" + childIndex
+                + " parentClass=" + parentClass
+                + " " + describe(view);
+        XposedBridge.log("iP26: QS_GLOBAL_NODE " + node);
+
+        if (isScrollOrPageCandidate(view)) {
+            XposedBridge.log("iP26: QS_SCROLL_CANDIDATE " + node
+                    + " scrollX=" + view.getScrollX()
+                    + " scrollY=" + view.getScrollY()
+                    + " canScrollLeft=" + view.canScrollHorizontally(-1)
+                    + " canScrollRight=" + view.canScrollHorizontally(1)
+                    + " canScrollUp=" + view.canScrollVertically(-1)
+                    + " canScrollDown=" + view.canScrollVertically(1)
+                    + " horizontalScrollbar="
+                    + (view instanceof ViewGroup
+                        ? ((ViewGroup) view).isHorizontalScrollBarEnabled() : false)
+                    + " verticalScrollbar="
+                    + (view instanceof ViewGroup
+                        ? ((ViewGroup) view).isVerticalScrollBarEnabled() : false));
+        }
+
+        if (!(view instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) view;
+        XposedBridge.log("iP26: QS_GLOBAL_CONTAINER depth=" + depth
+                + " index=" + childIndex
+                + " parentClass=" + parentClass
+                + " class=" + view.getClass().getName()
+                + " childCount=" + group.getChildCount()
+                + " clipChildren=" + group.getClipChildren()
+                + " clipToPadding=" + group.getClipToPadding()
+                + " scrollX=" + view.getScrollX()
+                + " scrollY=" + view.getScrollY()
+                + " size=" + view.getWidth() + "x" + view.getHeight()
+                + " measuredSize=" + view.getMeasuredWidth()
+                + "x" + view.getMeasuredHeight()
+                + " id=" + resourceId(view));
+        for (int i = 0; i < group.getChildCount()
+                && count[0] < MAX_GLOBAL_TREE_NODES; i++) {
+            walkGlobalHierarchy(group.getChildAt(i), view, i, depth + 1,
+                    visited, count);
+        }
+    }
+
+    private static boolean isScrollOrPageCandidate(View view) {
+        if (view == null) return false;
+        String name = view.getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        return view.canScrollHorizontally(-1) || view.canScrollHorizontally(1)
+                || view.canScrollVertically(-1) || view.canScrollVertically(1)
+                || name.contains("scroll")
+                || name.contains("pager")
+                || name.contains("recycler")
+                || name.contains("page")
+                || name.contains("controlcenter")
+                || name.contains("control_center")
+                || name.contains("qscontainer")
+                || name.contains("tilecontainer")
+                || name.contains("tile_container");
+    }
+
+    private static String resourceId(View view) {
+        int id = view.getId();
+        if (id == View.NO_ID) return "no-id";
+        try {
+            return view.getResources().getResourceName(id);
+        } catch (Throwable ignored) {
+            return "id-0x" + Integer.toHexString(id);
+        }
+    }
+
 }
